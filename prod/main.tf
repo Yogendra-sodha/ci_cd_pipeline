@@ -1,26 +1,61 @@
-# Create confluent provider
-
-terraform{
-    required_providers {
-        confluent = {
-            source = "confluentinc/confluent"
-            version = "1.47.0"
-        }
+# Configure the Confluent Provider
+terraform {
+  required_providers {
+    confluent = {
+      source  = "confluentinc/confluent"
+      version = "1.47.0"
     }
+  }
 }
 
-# configure the terraform backend
-terraform{
-    backend "s3"{
-        bucket = "platform-engineering-terraform-state-1"
-        key = "terraform/all-state/data-streaming-platform.tfstate"
-        region = "us-east-1"
-        encrypt = true
-    }
+# Configure the terraform backend to store the terraform state
+terraform {
+  backend "s3" {
+    bucket = "platform-engineering-terraform-state-1"
+    key    = "terraform/all-state/data-streaming-platform.tfstate"
+    region = "us-east-1"
+    encrypt = true
+  }
+}
+
+variable "confluent_cloud_api_key" {
+  description = "Confluent Cloud API Key (also referred as Cloud API ID)"
+  type        = string
+  sensitive = "true"
+}
+
+variable "confluent_cloud_api_secret" {
+  description = "Confluent Cloud API Secret"
+  type        = string
+  sensitive = "true"
+}
+
+variable "confluent_cloud_environment_name" {
+  default = "unnamed"
+}
+
+provider "confluent" {
+  cloud_api_key       = var.confluent_cloud_api_key
+  cloud_api_secret    = var.confluent_cloud_api_secret
+}
+
+resource "confluent_environment" "env" {
+  display_name = var.confluent_cloud_environment_name
+}
+
+resource "confluent_kafka_cluster" "standard" {
+  display_name = "standard_kafka_cluster"
+  availability = "SINGLE_ZONE"
+  cloud        = "AWS"
+  region       = "us-east-2"
+  standard {}
+
+  environment {
+    id = confluent_environment.env.id
+  }
 }
 
 # We use a dedicated service account, called 'platform-manager', per environment
-
 resource "confluent_service_account" "platform-manager" {
   display_name = "platform-manager-${confluent_environment.env.display_name}"
   description  = "Service account to manage the platform"
@@ -41,7 +76,8 @@ resource "confluent_api_key" "platform-manager-kafka-api-key" {
     api_version = confluent_service_account.platform-manager.api_version
     kind        = confluent_service_account.platform-manager.kind
   }
-anaged_resource {
+
+  managed_resource {
     id          = confluent_kafka_cluster.standard.id
     api_version = confluent_kafka_cluster.standard.api_version
     kind        = confluent_kafka_cluster.standard.kind
@@ -51,7 +87,12 @@ anaged_resource {
     }
   }
 
-depends_on = [
+  # The goal is to ensure that confluent_role_binding.app-manager-kafka-cluster-admin is created before
+  # confluent_api_key.app-manager-kafka-api-key is used to create instances of
+  # confluent_kafka_topic, confluent_kafka_acl resources.
+  # 'depends_on' meta-argument is specified to avoid having multiple copies of this definition in the configuration
+  # which would happen if we specify it in confluent_kafka_topic, confluent_kafka_acl resources instead.
+  depends_on = [
     confluent_role_binding.platform-manager-kafka-cluster-admin
   ]
 }
