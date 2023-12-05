@@ -12,7 +12,7 @@ terraform{
 # configure the terraform backend
 terraform{
     backend "s3"{
-        bucket = "platform-engineering-terraform-state"
+        bucket = "platform-engineering-terraform-state-1"
         key = "terraform/all-state/data-streaming-platform.tfstate"
         region = "us-east-1"
         encrypt = true
