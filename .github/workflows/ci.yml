@@ -10,7 +10,7 @@ on:
             - '**/README.md'
 
 env:
-    AWS_ACESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     TF_BUCKET_STATE: ${{ vars.TF_BUCKET_STATE }}
 
@@ -109,4 +109,3 @@ jobs:
             - name: Terraform Plan Status
               if: steps.plan.outcome == 'failure'
               run: exit 1            
-              
