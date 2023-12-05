@@ -1,0 +1,105 @@
+name: CD
+
+on:
+  pull_request:
+    types:
+      - closed
+    paths-ignore:
+      - '**/README.md'
+
+env:
+  # We're using AWS S3 as the Terraform backend
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  TF_BUCKET_STATE: ${{ vars.TF_BUCKET_STATE }}
+
+  # Credentials for Confluent Cloud
+  TF_VAR_CONFLUENT_CLOUD_API_KEY: ${{ secrets.TF_VAR_CONFLUENT_CLOUD_API_KEY }}
+  TF_VAR_CONFLUENT_CLOUD_API_SECRET: ${{ secrets.TF_VAR_CONFLUENT_CLOUD_API_SECRET }}
+
+  # Tell Terraform it's running in CI/CD
+  TF_IN_AUTOMATION: true
+
+jobs:
+  deploy_streaming_platform:
+    name: "Deploy ${{ matrix.environment }} platform"
+    if: github.event.pull_request.merged
+    strategy:
+      max-parallel: 1
+      matrix:
+        environment: [ staging, prod ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository to the runner
+        uses: actions/checkout@v3
+
+      - name: Check terraform files existence
+        id: check_files
+        uses: andstor/file-existence-action@v2
+        with:
+          files: "${{ matrix.environment }}/*.tf"
+          fail: true
+
+      - name: Setup Terraform with specified version on the runner
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.4
+
+      - name: Terraform init
+        id: init
+        run: terraform init -input=false -backend-config="bucket=$TF_BUCKET_STATE"
+        working-directory: ${{ matrix.environment }}
+
+      - name: Terraform validate
+        id: validate
+        run: terraform validate
+        working-directory: ${{ matrix.environment }}
+
+      - name: Terraform workspace
+        id: workspace
+        run: terraform workspace select -or-create ${{ matrix.environment }}
+        working-directory: ${{ matrix.environment }}
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -no-color -input=false
+          -var="confluent_cloud_api_key=$TF_VAR_CONFLUENT_CLOUD_API_KEY"
+          -var="confluent_cloud_api_secret=$TF_VAR_CONFLUENT_CLOUD_API_SECRET"
+          -var="confluent_cloud_environment_name=${{ matrix.environment }}"
+        continue-on-error: true
+        working-directory: ${{ matrix.environment }}
+
+      - uses: actions/github-script@v6
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          script: |
+            const output = `#### Terraform Format and Style 🖌
+            #### Environment ${{ matrix.environment }} (CD)
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+
+            </details>
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Terraform Apply
+        if: github.ref == 'main' && github.event.pull_request.merged
+        run: terraform apply -auto-approve -input=false
+          -var="confluent_cloud_api_key=$TF_VAR_CONFLUENT_CLOUD_API_KEY"
+          -var="confluent_cloud_api_secret=$TF_VAR_CONFLUENT_CLOUD_API_SECRET"
+          -var="confluent_cloud_environment_name=${{ matrix.environment }}"
+        working-directory: ${{ matrix.environment }}
